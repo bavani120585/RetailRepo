@@ -21,6 +21,14 @@
       "env": {
         "GITHUB_PERSONAL_ACCESS_TOKEN": "${GITHUB_PERSONAL_ACCESS_TOKEN}"
       }
+    },
+    "todo": {
+      "command": "dotnet",
+      "args": [
+        "run",
+        "--project",
+        "c:\\Users\\bavani.s\\Desktop\\RetailApp\\TodoMcpServer\\TodoMcpServer.csproj"
+      ]
     }
   }
 }
