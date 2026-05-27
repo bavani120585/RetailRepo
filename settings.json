@@ -1,0 +1,5 @@
+{
+  "ConnectionStrings": {
+    "DefaultConnection": "Server=(localdb)\\MSSQLLocalDB;Database=RetailDB;Integrated Security=true;Encrypt=true;TrustServerCertificate=false;"
+  }
+}

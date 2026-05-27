@@ -1,0 +1,1275 @@
+================================================================================
+        CUSTOM MCP SERVER DEMO - STEP BY STEP GUIDE
+        Building a To-Do Task Application with Custom MCP Server
+================================================================================
+
+OVERVIEW:
+This demo will show you how to create a custom MCP (Model Context Protocol)
+server using a simple C# Console Application. The example will be a TO-DO
+TASK application that manages tasks and can be integrated with Claude.
+
+================================================================================
+PART 1: WHAT IS MCP?
+================================================================================
+
+MCP (Model Context Protocol) is a protocol that allows Claude to connect to
+external tools and services. Think of it as a "bridge" between Claude and
+your applications.
+
+Example:
+- Without MCP: Claude knows only what you tell it in the chat
+- With MCP: Claude can directly access your To-Do app, fetch tasks, create
+  tasks, etc.
+
+================================================================================
+PART 1A: MCP PRIMITIVES (Building Blocks)
+================================================================================
+
+MCP has three main PRIMITIVES (core concepts) that Claude uses:
+
+1. RESOURCES
+   What: Data that the server provides
+   Example: Individual to-do task, user profile, document content
+   Think of: "What information do you have?"
+
+   In our To-Do app:
+   - Resource 1: List of all tasks (todo://all-tasks)
+   - Resource 2: Specific task by ID (todo://task/1)
+   - Resource 3: Completed tasks (todo://completed-tasks)
+
+2. TOOLS
+   What: Actions/Functions the server can perform
+   Example: Create task, update task, delete task
+   Think of: "What can you do?"
+
+   In our To-Do app:
+   - Tool 1: create_task() - Creates a new task
+   - Tool 2: update_task() - Modifies existing task
+   - Tool 3: delete_task() - Removes a task
+   - Tool 4: complete_task() - Marks task as done
+   - Tool 5: get_tasks() - Retrieves all tasks
+
+3. PROMPTS
+   What: Pre-built prompt templates for specific scenarios
+   Example: "Generate a task summary", "Suggest task priorities"
+   Think of: "What instructions should I give you?"
+
+   In our To-Do app:
+   - Prompt 1: "summarize_tasks" - Summarize all pending tasks
+   - Prompt 2: "organize_tasks" - Suggest task organization
+   - Prompt 3: "task_analysis" - Analyze task patterns
+
+VISUALIZATION:
+┌─────────────────────────────────────────────────┐
+│                  CLAUDE                         │
+│         (AI Assistant / Chat Interface)         │
+└──────────────────┬──────────────────────────────┘
+                   │
+         ┌─────────┴─────────┐
+         │   MCP Protocol    │
+         │   (Connection)    │
+         └─────────┬─────────┘
+                   │
+    ┌──────────────┼──────────────┐
+    │              │              │
+    ↓              ↓              ↓
+┌────────────┐ ┌─────────┐ ┌──────────────┐
+│ RESOURCES  │ │  TOOLS  │ │   PROMPTS    │
+├────────────┤ ├─────────┤ ├──────────────┤
+│ All Tasks  │ │ Create  │ │ Summarize    │
+│ Task by ID │ │ Update  │ │ Organize     │
+│ Completed  │ │ Delete  │ │ Analyze      │
+└────────────┘ └─────────┘ └──────────────┘
+    │              │              │
+    └──────────────┼──────────────┘
+                   │
+         ┌─────────┴─────────┐
+         │   To-Do Server    │
+         │  (C# App)         │
+         └─────────┬─────────┘
+                   │
+         ┌─────────┴─────────┐
+         │   In-Memory DB    │
+         │  (Task List)      │
+         └───────────────────┘
+
+================================================================================
+PART 2: ARCHITECTURE OF OUR TO-DO MCP SERVER
+================================================================================
+
+We'll create:
+
+1. C# Console Application (Backend)
+   - Manages To-Do tasks (Create, Read, Update, Delete)
+   - Listens for MCP requests
+   - Sends responses back
+
+2. mcp.json Configuration
+   - Tells Claude how to connect to our server
+   - Contains the command to start our app
+
+3. Integration with Claude
+   - Claude can ask for tasks
+   - Claude can create new tasks
+   - Claude can update/delete tasks
+
+FLOW:
+Claude (Chat)
+    ↓
+mcp.json (Configuration)
+    ↓
+C# Console App (MCP Server)
+    ↓
+To-Do Database (In-Memory List)
+
+================================================================================
+PART 3: STEP-BY-STEP IMPLEMENTATION
+================================================================================
+
+STEP 1: CREATE C# CONSOLE APPLICATION
+================================================================================
+
+1.1 Open Terminal/Command Prompt
+1.2 Navigate to your project folder:
+    cd c:\Users\bavani.s\Desktop\RetailApp
+
+1.3 Create a new console app:
+    dotnet new console -n TodoMcpServer
+    cd TodoMcpServer
+
+1.4 Your project structure:
+    TodoMcpServer/
+    ├── Program.cs
+    ├── TodoMcpServer.csproj
+    └── bin/
+    └── obj/
+
+
+STEP 2: INSTALL REQUIRED NUGET PACKAGES
+================================================================================
+
+2.1 Add MCP SDK package:
+    dotnet add package Anthropic.Sdk
+
+2.2 Add Newtonsoft.Json for JSON handling:
+    dotnet add package Newtonsoft.Json
+
+Your .csproj will have:
+    <ItemGroup>
+        <PackageReference Include="Anthropic.Sdk" Version="..." />
+        <PackageReference Include="Newtonsoft.Json" Version="..." />
+    </ItemGroup>
+
+
+STEP 3: CREATE TODO MODEL CLASS
+================================================================================
+
+3.1 Create a new file: TodoItem.cs
+
+CONTENT:
+--------
+using System;
+
+namespace TodoMcpServer
+{
+    public class TodoItem
+    {
+        public int Id { get; set; }
+        public string Title { get; set; }
+        public string Description { get; set; }
+        public bool IsCompleted { get; set; }
+        public DateTime CreatedDate { get; set; }
+    }
+}
+--------
+
+This class represents a single To-Do task.
+
+
+STEP 4: CREATE TODO SERVICE CLASS
+================================================================================
+
+4.1 Create a new file: TodoService.cs
+
+CONTENT:
+--------
+using System;
+using System.Collections.Generic;
+using System.Linq;
+
+namespace TodoMcpServer
+{
+    public class TodoService
+    {
+        private List<TodoItem> todos = new List<TodoItem>();
+        private int nextId = 1;
+
+        // GET ALL TODOS
+        public List<TodoItem> GetAllTodos()
+        {
+            return todos.OrderBy(t => t.CreatedDate).ToList();
+        }
+
+        // GET TODO BY ID
+        public TodoItem GetTodoById(int id)
+        {
+            return todos.FirstOrDefault(t => t.Id == id);
+        }
+
+        // CREATE NEW TODO
+        public TodoItem CreateTodo(string title, string description)
+        {
+            var todo = new TodoItem
+            {
+                Id = nextId++,
+                Title = title,
+                Description = description,
+                IsCompleted = false,
+                CreatedDate = DateTime.Now
+            };
+            todos.Add(todo);
+            return todo;
+        }
+
+        // UPDATE TODO
+        public TodoItem UpdateTodo(int id, string title, string description, bool isCompleted)
+        {
+            var todo = GetTodoById(id);
+            if (todo != null)
+            {
+                todo.Title = title;
+                todo.Description = description;
+                todo.IsCompleted = isCompleted;
+            }
+            return todo;
+        }
+
+        // DELETE TODO
+        public bool DeleteTodo(int id)
+        {
+            var todo = GetTodoById(id);
+            if (todo != null)
+            {
+                todos.Remove(todo);
+                return true;
+            }
+            return false;
+        }
+
+        // MARK TODO AS COMPLETED
+        public TodoItem CompleteTodo(int id)
+        {
+            var todo = GetTodoById(id);
+            if (todo != null)
+            {
+                todo.IsCompleted = true;
+            }
+            return todo;
+        }
+    }
+}
+--------
+
+This class handles all to-do operations (Create, Read, Update, Delete).
+
+
+STEP 4B: IMPLEMENT MCP PRIMITIVES
+================================================================================
+
+Before creating the server, let's define our MCP primitives:
+
+4B.1 RESOURCES Definition (What data do we expose?)
+────────────────────────────────────────────────────
+
+Resource 1: All Tasks List
+  URI: todo://tasks
+  Type: Read-only list of all tasks
+  Description: "Get a list of all to-do tasks"
+  Returns: Array of TodoItem objects
+
+Resource 2: Single Task
+  URI: todo://task/{id}
+  Type: Single task by ID
+  Description: "Get a specific task by ID"
+  Returns: Single TodoItem object
+
+Resource 3: Completed Tasks
+  URI: todo://tasks/completed
+  Type: Filtered list
+  Description: "Get all completed tasks"
+  Returns: Array of completed TodoItem objects
+
+4B.2 TOOLS Definition (What actions can we perform?)
+────────────────────────────────────────────────────
+
+Tool 1: CreateTask
+  Name: create_task
+  Input: title (string), description (string)
+  Output: Created TodoItem with ID
+  Example: Create "Buy Milk" with description "Grocery shopping"
+
+Tool 2: UpdateTask
+  Name: update_task
+  Input: id (int), title (string), description (string), isCompleted (bool)
+  Output: Updated TodoItem
+  Example: Update task 1 with new title
+
+Tool 3: DeleteTask
+  Name: delete_task
+  Input: id (int)
+  Output: Success boolean
+  Example: Delete task 2
+
+Tool 4: CompleteTask
+  Name: complete_task
+  Input: id (int)
+  Output: Updated TodoItem with isCompleted = true
+  Example: Mark task 1 as complete
+
+Tool 5: GetAllTasks
+  Name: get_all_tasks
+  Input: None
+  Output: Array of all TodoItem objects
+  Example: Get list of all tasks
+
+4B.3 PROMPTS Definition (What templates do we provide?)
+────────────────────────────────────────────────────────
+
+Prompt 1: Summarize Tasks
+  Name: summarize_tasks
+  Description: "Analyze and summarize all tasks"
+  Template: "Please review these tasks and provide a summary of what needs
+             to be done, what's pending, and what's completed."
+
+Prompt 2: Organize Tasks
+  Name: organize_tasks
+  Description: "Suggest how to organize tasks better"
+  Template: "Based on these tasks, suggest a better organization or
+             categorization approach."
+
+Prompt 3: Priority Analysis
+  Name: task_priority
+  Description: "Analyze task priorities"
+  Template: "Review these tasks and suggest which ones should be prioritized
+             based on typical work patterns."
+
+
+STEP 5: CREATE MCP SERVER CLASS
+================================================================================
+
+5.1 Create a new file: McpTodoServer.cs
+
+CONTENT:
+--------
+using System;
+using System.Collections.Generic;
+using System.IO;
+using System.Linq;
+using Newtonsoft.Json;
+
+namespace TodoMcpServer
+{
+    public class McpTodoServer
+    {
+        private TodoService todoService;
+
+        public McpTodoServer()
+        {
+            todoService = new TodoService();
+        }
+
+        // INITIALIZE SERVER
+        public void Start()
+        {
+            Console.WriteLine("[MCP Server] To-Do Task Server Started");
+            Console.WriteLine("[MCP Server] Listening for requests...");
+
+            // Add sample data
+            todoService.CreateTodo("Complete RetailApp", "Finish the MCP custom server demo");
+            todoService.CreateTodo("Learn MCP Protocol", "Understand how MCP works");
+
+            ListenForRequests();
+        }
+
+        // LISTEN FOR INCOMING REQUESTS FROM CLAUDE
+        private void ListenForRequests()
+        {
+            while (true)
+            {
+                try
+                {
+                    string input = Console.ReadLine();
+                    if (string.IsNullOrWhiteSpace(input)) continue;
+
+                    // Parse JSON request
+                    dynamic request = JsonConvert.DeserializeObject(input);
+                    string action = request["action"];
+
+                    string response = ProcessAction(action, request);
+                    Console.WriteLine(response);
+                }
+                catch (Exception ex)
+                {
+                    Console.WriteLine(JsonConvert.SerializeObject(new
+                    {
+                        error = ex.Message
+                    }));
+                }
+            }
+        }
+
+        // PROCESS ACTIONS
+        private string ProcessAction(string action, dynamic request)
+        {
+            return action switch
+            {
+                "get_all_todos" => GetAllTodos(),
+                "get_todo" => GetTodo((int)request["id"]),
+                "create_todo" => CreateTodo((string)request["title"], (string)request["description"]),
+                "update_todo" => UpdateTodo((int)request["id"], (string)request["title"],
+                                           (string)request["description"], (bool)request["isCompleted"]),
+                "delete_todo" => DeleteTodo((int)request["id"]),
+                "complete_todo" => CompleteTodo((int)request["id"]),
+                _ => JsonConvert.SerializeObject(new { error = "Unknown action" })
+            };
+        }
+
+        // ACTION HANDLERS
+        private string GetAllTodos()
+        {
+            var todos = todoService.GetAllTodos();
+            return JsonConvert.SerializeObject(new { success = true, data = todos });
+        }
+
+        private string GetTodo(int id)
+        {
+            var todo = todoService.GetTodoById(id);
+            return JsonConvert.SerializeObject(new { success = todo != null, data = todo });
+        }
+
+        private string CreateTodo(string title, string description)
+        {
+            var todo = todoService.CreateTodo(title, description);
+            return JsonConvert.SerializeObject(new { success = true, data = todo });
+        }
+
+        private string UpdateTodo(int id, string title, string description, bool isCompleted)
+        {
+            var todo = todoService.UpdateTodo(id, title, description, isCompleted);
+            return JsonConvert.SerializeObject(new { success = todo != null, data = todo });
+        }
+
+        private string DeleteTodo(int id)
+        {
+            bool deleted = todoService.DeleteTodo(id);
+            return JsonConvert.SerializeObject(new { success = deleted });
+        }
+
+        private string CompleteTodo(int id)
+        {
+            var todo = todoService.CompleteTodo(id);
+            return JsonConvert.SerializeObject(new { success = todo != null, data = todo });
+        }
+    }
+}
+--------
+
+This is the main MCP server that handles requests from Claude.
+
+
+STEP 6: UPDATE PROGRAM.CS
+================================================================================
+
+6.1 Replace the content of Program.cs:
+
+CONTENT:
+--------
+using System;
+
+namespace TodoMcpServer
+{
+    class Program
+    {
+        static void Main(string[] args)
+        {
+            var server = new McpTodoServer();
+            server.Start();
+        }
+    }
+}
+--------
+
+
+STEP 7: BUILD THE APPLICATION
+================================================================================
+
+7.1 Build the C# project:
+    dotnet build
+
+7.2 Output should show:
+    Build succeeded.
+
+7.3 The executable will be at:
+    TodoMcpServer/bin/Debug/net8.0/TodoMcpServer.exe
+
+
+STEP 8: CONFIGURE MCP IN mcp.json
+================================================================================
+
+8.1 Update your mcp.json file to include the Todo MCP Server:
+
+CONTENT:
+--------
+{
+  "mcpServers": {
+    "jira": {
+      "command": "npx",
+      "args": ["-y", "@atlassian/mcp-server-jira"],
+      "env": {
+        "JIRA_BASE_URL": "https://retailapp.atlassian.net/",
+        "JIRA_EMAIL": "nithybava@gmail.com",
+        "JIRA_API_TOKEN": "${JIRA_API_TOKEN}"
+      }
+    },
+    "github": {
+      "command": "npx",
+      "args": ["-y", "@modelcontextprotocol/server-github"],
+      "env": {
+        "GITHUB_PERSONAL_ACCESS_TOKEN": "${GITHUB_PERSONAL_ACCESS_TOKEN}"
+      }
+    },
+    "todo": {
+      "command": "dotnet",
+      "args": [
+        "run",
+        "--project",
+        "c:\\Users\\bavani.s\\Desktop\\RetailApp\\TodoMcpServer\\TodoMcpServer.csproj"
+      ]
+    }
+  }
+}
+--------
+
+This tells Claude Code how to launch your To-Do MCP server.
+
+
+STEP 9: TEST YOUR MCP SERVER
+================================================================================
+
+9.1 Start the server manually:
+    cd TodoMcpServer
+    dotnet run
+
+9.2 Server will output:
+    [MCP Server] To-Do Task Server Started
+    [MCP Server] Listening for requests...
+
+9.3 Send a test request (paste this and press Enter):
+    {"action":"get_all_todos"}
+
+9.4 You should see:
+    {"success":true,"data":[{"id":1,"title":"Complete RetailApp",...}]}
+
+9.5 To stop: Press Ctrl+C
+
+
+STEP 9B: IMPLEMENTING PRIMITIVES IN CODE
+================================================================================
+
+9B.1 Create Resources Handler
+──────────────────────────────
+
+Create a new file: McpResources.cs
+
+CONTENT:
+--------
+using System;
+using System.Collections.Generic;
+using Newtonsoft.Json;
+
+namespace TodoMcpServer
+{
+    public class McpResources
+    {
+        private TodoService todoService;
+
+        public McpResources(TodoService todoService)
+        {
+            this.todoService = todoService;
+        }
+
+        // Get all tasks as a resource
+        public string GetAllTasksResource()
+        {
+            var todos = todoService.GetAllTodos();
+            return JsonConvert.SerializeObject(new
+            {
+                resourceUri = "todo://tasks",
+                resourceType = "list",
+                description = "All to-do tasks",
+                data = todos
+            });
+        }
+
+        // Get completed tasks as a resource
+        public string GetCompletedTasksResource()
+        {
+            var todos = todoService.GetAllTodos();
+            var completed = todos.FindAll(t => t.IsCompleted);
+            return JsonConvert.SerializeObject(new
+            {
+                resourceUri = "todo://tasks/completed",
+                resourceType = "list",
+                description = "Completed tasks",
+                data = completed
+            });
+        }
+
+        // Get pending tasks as a resource
+        public string GetPendingTasksResource()
+        {
+            var todos = todoService.GetAllTodos();
+            var pending = todos.FindAll(t => !t.IsCompleted);
+            return JsonConvert.SerializeObject(new
+            {
+                resourceUri = "todo://tasks/pending",
+                resourceType = "list",
+                description = "Pending tasks",
+                data = pending
+            });
+        }
+
+        // Get specific task by ID
+        public string GetTaskResourceById(int id)
+        {
+            var todo = todoService.GetTodoById(id);
+            return JsonConvert.SerializeObject(new
+            {
+                resourceUri = $"todo://task/{id}",
+                resourceType = "single",
+                description = $"Task with ID {id}",
+                data = todo
+            });
+        }
+    }
+}
+--------
+
+
+9B.2 Create Tools Handler
+──────────────────────────
+
+Create a new file: McpTools.cs
+
+CONTENT:
+--------
+using System;
+using Newtonsoft.Json;
+
+namespace TodoMcpServer
+{
+    public class McpTools
+    {
+        private TodoService todoService;
+
+        public McpTools(TodoService todoService)
+        {
+            this.todoService = todoService;
+        }
+
+        // Tool: Create Task
+        public string CreateTaskTool(string title, string description)
+        {
+            var todo = todoService.CreateTodo(title, description);
+            return JsonConvert.SerializeObject(new
+            {
+                toolName = "create_task",
+                success = true,
+                message = $"Task created with ID {todo.Id}",
+                result = todo
+            });
+        }
+
+        // Tool: Update Task
+        public string UpdateTaskTool(int id, string title, string description, bool isCompleted)
+        {
+            var todo = todoService.UpdateTodo(id, title, description, isCompleted);
+            return JsonConvert.SerializeObject(new
+            {
+                toolName = "update_task",
+                success = todo != null,
+                message = todo != null ? "Task updated" : "Task not found",
+                result = todo
+            });
+        }
+
+        // Tool: Delete Task
+        public string DeleteTaskTool(int id)
+        {
+            bool deleted = todoService.DeleteTodo(id);
+            return JsonConvert.SerializeObject(new
+            {
+                toolName = "delete_task",
+                success = deleted,
+                message = deleted ? $"Task {id} deleted" : "Task not found",
+                taskId = id
+            });
+        }
+
+        // Tool: Complete Task
+        public string CompleteTaskTool(int id)
+        {
+            var todo = todoService.CompleteTodo(id);
+            return JsonConvert.SerializeObject(new
+            {
+                toolName = "complete_task",
+                success = todo != null,
+                message = todo != null ? "Task marked complete" : "Task not found",
+                result = todo
+            });
+        }
+
+        // Tool: Get All Tasks
+        public string GetAllTasksTool()
+        {
+            var todos = todoService.GetAllTodos();
+            return JsonConvert.SerializeObject(new
+            {
+                toolName = "get_all_tasks",
+                success = true,
+                message = $"Retrieved {todos.Count} tasks",
+                result = todos
+            });
+        }
+    }
+}
+--------
+
+
+9B.3 Create Prompts Handler
+──────────────────────────────
+
+Create a new file: McpPrompts.cs
+
+CONTENT:
+--------
+using System;
+using System.Collections.Generic;
+using Newtonsoft.Json;
+
+namespace TodoMcpServer
+{
+    public class McpPrompts
+    {
+        private TodoService todoService;
+
+        public McpPrompts(TodoService todoService)
+        {
+            this.todoService = todoService;
+        }
+
+        // Prompt: Summarize Tasks
+        public string SummarizeTasks()
+        {
+            var todos = todoService.GetAllTodos();
+            var completed = todos.FindAll(t => t.IsCompleted);
+            var pending = todos.FindAll(t => !t.IsCompleted);
+
+            return JsonConvert.SerializeObject(new
+            {
+                promptName = "summarize_tasks",
+                template = "Please analyze these tasks and provide a summary",
+                tasksSummary = new
+                {
+                    total = todos.Count,
+                    completed = completed.Count,
+                    pending = pending.Count,
+                    completionPercentage = todos.Count > 0 ? (completed.Count * 100 / todos.Count) : 0
+                },
+                allTasks = todos
+            });
+        }
+
+        // Prompt: Organize Tasks
+        public string OrganizeTasks()
+        {
+            var todos = todoService.GetAllTodos();
+
+            return JsonConvert.SerializeObject(new
+            {
+                promptName = "organize_tasks",
+                template = "Suggest how to organize these tasks better",
+                instruction = "Based on task titles and descriptions, suggest categories or groups",
+                allTasks = todos
+            });
+        }
+
+        // Prompt: Task Priority Analysis
+        public string AnalyzeTaskPriority()
+        {
+            var todos = todoService.GetAllTodos();
+
+            return JsonConvert.SerializeObject(new
+            {
+                promptName = "task_priority",
+                template = "Analyze these tasks and suggest priorities",
+                instruction = "Review tasks and identify which should be done first based on typical work patterns",
+                allTasks = todos
+            });
+        }
+    }
+}
+--------
+
+
+STEP 10: EXAMPLE REQUESTS FOR TESTING
+================================================================================
+
+RESOURCE REQUESTS:
+──────────────────
+
+GET ALL TASKS (RESOURCE):
+{"action":"resource","resource":"todo://tasks"}
+
+GET COMPLETED TASKS (RESOURCE):
+{"action":"resource","resource":"todo://tasks/completed"}
+
+GET PENDING TASKS (RESOURCE):
+{"action":"resource","resource":"todo://tasks/pending"}
+
+GET SINGLE TASK (RESOURCE):
+{"action":"resource","resource":"todo://task/1"}
+
+
+TOOL REQUESTS:
+──────────────
+
+CREATE NEW TODO (TOOL):
+{"action":"tool","tool":"create_task","title":"Buy Groceries","description":"Milk, Eggs, Bread"}
+
+UPDATE TODO (TOOL):
+{"action":"tool","tool":"update_task","id":1,"title":"Updated Title","description":"Updated Desc","isCompleted":false}
+
+MARK TASK AS COMPLETE (TOOL):
+{"action":"tool","tool":"complete_task","id":1}
+
+DELETE TODO (TOOL):
+{"action":"tool","tool":"delete_task","id":1}
+
+GET ALL TASKS (TOOL):
+{"action":"tool","tool":"get_all_tasks"}
+
+
+PROMPT REQUESTS:
+────────────────
+
+SUMMARIZE TASKS (PROMPT):
+{"action":"prompt","prompt":"summarize_tasks"}
+
+ORGANIZE TASKS (PROMPT):
+{"action":"prompt","prompt":"organize_tasks"}
+
+ANALYZE PRIORITIES (PROMPT):
+{"action":"prompt","prompt":"task_priority"}
+
+
+================================================================================
+PART 4: HOW MCP PRIMITIVES WORK IN PRACTICE
+================================================================================
+
+4.1 PRIMITIVE WORKFLOW
+══════════════════════
+
+When you ask Claude something, here's what happens:
+
+USER INPUT: "Show me all my pending tasks and suggest priorities"
+
+STEP 1: Claude analyzes the request
+   - Recognizes you want task information (RESOURCE)
+   - Recognizes you want analysis (PROMPT)
+
+STEP 2: Claude uses RESOURCES
+   - Calls Resource: todo://tasks
+   - Server returns all task objects
+   - Result: List of TodoItem objects
+
+STEP 3: Claude uses TOOLS (if needed)
+   - If you said "create a task", it would call create_task TOOL
+   - If you said "mark complete", it would call complete_task TOOL
+   - In this case, no TOOLS needed - just reading data
+
+STEP 4: Claude uses PROMPTS
+   - Activates: task_priority PROMPT
+   - Template provides context for analysis
+   - Claude analyzes tasks using the prompt
+   - Generates suggestions for you
+
+STEP 5: Claude returns combined result
+   - Shows you the tasks (from RESOURCE)
+   - Shows you priorities (from PROMPT analysis)
+   - All in one conversational response
+
+4.2 FLOW DIAGRAM
+═════════════════
+
+USER: "Create a task and show me all tasks"
+    ↓
+CLAUDE: "I'll use the create_task TOOL and get_all_tasks RESOURCE"
+    ↓
+┌─── TOOL EXECUTION ─────────┐
+│ Tool: create_task          │
+│ Input: title, description  │
+│ Output: New TodoItem       │
+└─────────────────────────────┘
+    ↓
+┌─── RESOURCE RETRIEVAL ─────┐
+│ Resource: todo://tasks     │
+│ Output: All TodoItem[]     │
+└─────────────────────────────┘
+    ↓
+CLAUDE COMBINES RESULTS
+    ↓
+RESPONSE TO USER:
+"✓ Created new task
+ Here are all your tasks:
+ 1. Task 1
+ 2. Task 2
+ 3. New Task (just created)"
+
+
+4.3 REAL EXAMPLES WITH PRIMITIVES
+═════════════════════════════════════
+
+EXAMPLE 1: Reading Data (RESOURCES Only)
+─────────────────────────────────────────
+You: "What tasks do I have?"
+Claude: Uses RESOURCE: todo://tasks
+Claude: Returns all tasks
+Claude: Shows you the list
+
+EXAMPLE 2: Creating Data (TOOLS)
+─────────────────────────────────
+You: "Add a task to call the client"
+Claude: Uses TOOL: create_task
+Claude: Inputs: title="Call the client", description=""
+Claude: Gets back: {id: 3, title: "Call the client", ...}
+Claude: Confirms: "✓ Created task #3"
+
+EXAMPLE 3: Analyzing Data (RESOURCES + PROMPTS)
+────────────────────────────────────────────────
+You: "What should I focus on today?"
+Claude: Uses RESOURCE: todo://tasks (gets all tasks)
+Claude: Uses PROMPT: task_priority (analyzes importance)
+Claude: Returns: "Based on your tasks, focus on:
+                  1. [Task 2] - Time sensitive
+                  2. [Task 5] - High impact"
+
+EXAMPLE 4: Multiple Operations (TOOLS + RESOURCES)
+───────────────────────────────────────────────────
+You: "Mark my first task complete and show remaining"
+Claude: Uses TOOL: complete_task (id=1)
+Claude: Uses RESOURCE: todo://tasks (gets updated list)
+Claude: Shows: "✓ Marked complete.
+                Remaining tasks:
+                - Task 2
+                - Task 3
+                - Task 4"
+
+
+================================================================================
+PART 4.5: HOW TO USE WITH CLAUDE
+================================================================================
+
+Once integrated in mcp.json, you can ask Claude:
+
+✓ "Show me all my to-do tasks"
+  → Uses RESOURCE: todo://tasks
+
+✓ "Create a task to review the project"
+  → Uses TOOL: create_task
+
+✓ "Mark task 2 as complete"
+  → Uses TOOL: complete_task
+
+✓ "Delete all completed tasks"
+  → Uses TOOL: delete_task (multiple times)
+
+✓ "What should I prioritize today?"
+  → Uses RESOURCE: todo://tasks + PROMPT: task_priority
+
+✓ "Summarize my workload"
+  → Uses RESOURCE: todo://tasks + PROMPT: summarize_tasks
+
+Claude will automatically:
+1. Analyze your request
+2. Identify which PRIMITIVES to use (Resources, Tools, Prompts)
+3. Call the appropriate server actions
+4. Get responses from the C# server
+5. Process results using prompts if needed
+6. Present final answer back to you
+
+
+================================================================================
+PART 5: DIRECTORY STRUCTURE AFTER DEMO
+================================================================================
+
+RetailApp/
+├── .env
+├── .gitignore
+├── mcp.json
+├── settings.json
+├── MCP_CUSTOM_SERVER_DEMO.txt (this file)
+├── TodoMcpServer/
+│   ├── Program.cs
+│   ├── TodoItem.cs
+│   ├── TodoService.cs
+│   ├── McpTodoServer.cs
+│   ├── TodoMcpServer.csproj
+│   ├── bin/
+│   │   └── Debug/
+│   │       └── net8.0/
+│   │           └── TodoMcpServer.exe
+│   └── obj/
+├── RetailEdge_DAL/
+├── RetailEdge_Service/
+└── RetailEdge_Scripts/
+
+
+================================================================================
+PART 6: TROUBLESHOOTING
+================================================================================
+
+ISSUE: "dotnet: command not found"
+SOLUTION: Install .NET SDK from https://dotnet.microsoft.com/download
+
+ISSUE: "Package not found"
+SOLUTION: Check internet connection and run:
+         dotnet restore
+
+ISSUE: Server won't start
+SOLUTION: Check if port is already in use
+         Kill the process and try again
+
+ISSUE: Claude can't connect to server
+SOLUTION: Verify mcp.json path is correct
+         Check if server is running
+         Verify firewall settings
+
+
+================================================================================
+PART 6B: COMPLETE PRIMITIVE INTERACTION EXAMPLE
+================================================================================
+
+Let's walk through a complete scenario with all three primitives:
+
+SCENARIO: User asks Claude - "What's my workload like today?"
+
+STEP 1: Claude receives the request
+   User: "What's my workload like today?"
+
+STEP 2: Claude decides which primitives to use
+   - Needs data → Use RESOURCE: todo://tasks
+   - Needs analysis → Use PROMPT: summarize_tasks
+
+STEP 3: Claude calls RESOURCE
+   Action: {"action":"resource","resource":"todo://tasks"}
+   Server returns:
+   {
+     "resourceUri": "todo://tasks",
+     "data": [
+       {"id": 1, "title": "Review meeting notes", "isCompleted": false},
+       {"id": 2, "title": "Email client", "isCompleted": true},
+       {"id": 3, "title": "Code review", "isCompleted": false}
+     ]
+   }
+
+STEP 4: Claude activates PROMPT
+   Action: {"action":"prompt","prompt":"summarize_tasks"}
+   Server returns:
+   {
+     "promptName": "summarize_tasks",
+     "tasksSummary": {
+       "total": 3,
+       "completed": 1,
+       "pending": 2,
+       "completionPercentage": 33
+     }
+   }
+
+STEP 5: Claude combines data with prompt analysis
+   Claude thinks: "I have:
+   - 3 total tasks (2 pending, 1 completed)
+   - 33% completion rate
+   - Need to do: Review notes, Code review
+   - Already done: Email client"
+
+STEP 6: Claude responds to user
+   Response: "You have a moderate workload today.
+
+   STATUS: 2 pending, 1 completed (33% done)
+
+   PENDING TASKS:
+   • Review meeting notes
+   • Code review
+
+   COMPLETED:
+   ✓ Email client
+
+   SUGGESTION: Both remaining tasks are important.
+   I'd recommend starting with 'Review meeting notes'
+   since insights from that might help with code review."
+
+
+ANOTHER EXAMPLE: User asks - "Mark my first task done and show what's left"
+
+STEP 1: User request
+   User: "Mark my first task done and show what's left"
+
+STEP 2: Claude decides to use TOOL + RESOURCE
+   - Need to modify data → Use TOOL: complete_task
+   - Need to show updated data → Use RESOURCE: todo://tasks/pending
+
+STEP 3: Claude executes the TOOL
+   Action: {"action":"tool","tool":"complete_task","id":1}
+   Server returns:
+   {
+     "toolName": "complete_task",
+     "success": true,
+     "message": "Task marked complete",
+     "result": {"id": 1, "title": "Review meeting notes", "isCompleted": true}
+   }
+
+STEP 4: Claude gets updated RESOURCE
+   Action: {"action":"resource","resource":"todo://tasks/pending"}
+   Server returns:
+   {
+     "resourceUri": "todo://tasks/pending",
+     "data": [
+       {"id": 3, "title": "Code review", "isCompleted": false}
+     ]
+   }
+
+STEP 5: Claude responds
+   Response: "✓ Task marked complete!
+
+   REMAINING TASKS:
+   • Code review
+
+   You're making good progress - 1 more task to go!"
+
+
+================================================================================
+PART 7: NEXT STEPS & ENHANCEMENTS
+================================================================================
+
+To make this more advanced:
+
+1. Add persistent storage (save to JSON file)
+2. Add database integration (SQL Server)
+3. Add authentication tokens
+4. Add error handling and validation
+5. Add logging with timestamps
+6. Add filters (search by title, date range, status)
+7. Add priority levels (High, Medium, Low)
+8. Add due dates and deadlines
+9. Add categories/tags and grouping
+10. Add recurring tasks
+11. Add more RESOURCES (by category, by date, by priority)
+12. Add more TOOLS (bulk operations, archive, restore)
+13. Add more PROMPTS (time management, deadline alerts, workload distribution)
+14. Add performance tracking and statistics
+
+
+================================================================================
+PART 8: SUMMARY - MCP PRIMITIVES RECAP
+================================================================================
+
+QUICK REFERENCE TABLE:
+
+┌──────────┬─────────────────┬──────────────────┬──────────────────────┐
+│ Primitive│ Purpose         │ How Claude Uses  │ Example              │
+├──────────┼─────────────────┼──────────────────┼──────────────────────┤
+│RESOURCES │ Expose data     │ READ information │ "Show all tasks"     │
+│          │ Available info  │ Get context      │ "What's completed?"  │
+│          │ Read-only views │ Source of truth  │                      │
+├──────────┼─────────────────┼──────────────────┼──────────────────────┤
+│  TOOLS   │ Perform actions │ CREATE/UPDATE    │ "Create a task"      │
+│          │ Modify state    │ MODIFY/DELETE    │ "Mark as done"       │
+│          │ Call functions  │ data             │ "Remove this task"   │
+├──────────┼─────────────────┼──────────────────┼──────────────────────┤
+│ PROMPTS  │ Analyze/suggest │ PROCESS results  │ "Suggest priorities" │
+│          │ Template logic  │ Provide context  │ "Analyze workload"   │
+│          │ Pre-built tasks │ Guide behavior   │ "Summarize tasks"    │
+└──────────┴─────────────────┴──────────────────┴──────────────────────┘
+
+HOW THEY WORK TOGETHER:
+
+1. RESOURCES provide the DATA
+   └─ "Here's what I know"
+
+2. TOOLS perform ACTIONS
+   └─ "Here's what I can do"
+
+3. PROMPTS guide ANALYSIS
+   └─ "Here's how to think about it"
+
+EXAMPLE FLOW:
+┌─────────────────────────────────────────────────────────┐
+│ User: "Create a task and show me what's overdue"       │
+└─────────────────────────────────────────────────────────┘
+         │
+         ├─→ TOOL: create_task (Does action)
+         │   └─ Creates: "Review project"
+         │
+         ├─→ RESOURCE: todo://tasks (Gets data)
+         │   └─ Returns: All tasks including new one
+         │
+         ├─→ PROMPT: task_priority (Analyzes)
+         │   └─ Identifies: What's overdue/critical
+         │
+         └─→ RESPONSE: "✓ Created task. Here's your
+                         overdue work: [list]"
+
+
+================================================================================
+PART 8B: SUMMARY
+================================================================================
+
+What we created:
+✓ Custom MCP Server using C# Console Application
+✓ To-Do Task management system with three core PRIMITIVES
+✓ RESOURCES - Data exposure (All tasks, Pending, Completed, By ID)
+✓ TOOLS - Function calls (Create, Update, Delete, Complete, Get)
+✓ PROMPTS - Analysis templates (Summarize, Organize, Prioritize)
+✓ JSON-based request/response protocol
+✓ Integration with Claude via mcp.json
+✓ Complete CRUD operations with primitive support
+✓ Real examples of how Claude interacts with primitives
+
+Skills learned:
+✓ What MCP Primitives are (Resources, Tools, Prompts)
+✓ How each primitive works individually
+✓ How primitives work together
+✓ How to build a custom server with primitives
+✓ How to integrate with Claude
+✓ C# console application development
+✓ JSON request/response handling
+✓ Real-world primitive interaction patterns
+
+UNDERSTANDING PRIMITIVES IS KEY TO MCP:
+- Resources = What the server KNOWS
+- Tools = What the server CAN DO
+- Prompts = How to ANALYZE/THINK about data
+
+This is a strong foundation. You can expand it with:
+- More complex logic and business rules
+- Database integration (SQL Server, PostgreSQL)
+- Advanced features (filtering, sorting, pagination)
+- Multiple entities (Users, Projects, Categories)
+- More sophisticated RESOURCES (complex queries)
+- More powerful TOOLS (bulk operations, workflows)
+- Smarter PROMPTS (ML-based analysis, recommendations)
+
+================================================================================
+END OF DEMO GUIDE
+================================================================================
