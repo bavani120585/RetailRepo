@@ -13,14 +13,36 @@ namespace TodoMcpServer
         private McpResources mcpResources;
         private McpTools mcpTools;
         private McpPrompts mcpPrompts;
+        private HookManager hookManager;
 
         public McpTodoServer()
         {
             todoService = new TodoService();
-            mcpResources = new McpResources(todoService);
-            mcpTools = new McpTools(todoService);
+            hookManager = new HookManager();
+            mcpResources = new McpResources(todoService, hookManager);
+            mcpTools = new McpTools(todoService, hookManager);
             mcpPrompts = new McpPrompts(todoService);
+
+            RegisterHooks();
         }
+
+        private void RegisterHooks()
+        {
+            hookManager.OnTaskCreated(HookHandlers.LogTaskOperation);
+            hookManager.OnTaskCreated(HookHandlers.NotifyTaskOperation);
+            hookManager.OnTaskCreated(HookHandlers.UpdateDashboard);
+
+            hookManager.OnTaskCompleted(HookHandlers.LogTaskOperation);
+            hookManager.OnTaskCompleted(HookHandlers.CalculateStatistics);
+            hookManager.OnTaskCompleted(HookHandlers.ArchiveCompleted);
+
+            hookManager.OnTaskDeleted(HookHandlers.LogTaskOperation);
+
+            hookManager.OnTaskUpdated(HookHandlers.LogTaskOperation);
+            hookManager.OnTaskUpdated(HookHandlers.UpdateDashboard);
+        }
+
+        public HookManager HookManager => hookManager;
 
         public void Start()
         {
@@ -87,6 +109,8 @@ namespace TodoMcpServer
                 "todo://tasks" => mcpResources.GetAllTasksResource(),
                 "todo://tasks/completed" => mcpResources.GetCompletedTasksResource(),
                 "todo://tasks/pending" => mcpResources.GetPendingTasksResource(),
+                "todo://hooks/logs" => mcpResources.GetHookLogs(),
+                "todo://hooks/status" => mcpResources.GetHookStatus(),
                 _ when resource?.StartsWith("todo://task/") == true =>
                     mcpResources.GetTaskResourceById(int.Parse(resource.Replace("todo://task/", ""))),
                 _ => JsonConvert.SerializeObject(new { error = $"Unknown resource: {resource}" })

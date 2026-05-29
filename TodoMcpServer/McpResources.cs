@@ -7,10 +7,12 @@ namespace TodoMcpServer
     public class McpResources
     {
         private TodoService todoService;
+        private HookManager hookManager;
 
-        public McpResources(TodoService todoService)
+        public McpResources(TodoService todoService, HookManager hookManager)
         {
             this.todoService = todoService;
+            this.hookManager = hookManager;
         }
 
         public string GetAllTasksResource()
@@ -60,6 +62,30 @@ namespace TodoMcpServer
                 resourceType = "single",
                 description = $"Task with ID {id}",
                 data = todo
+            });
+        }
+
+        public string GetHookLogs()
+        {
+            var logs = hookManager.GetAllLogs();
+            return JsonConvert.SerializeObject(new
+            {
+                resourceUri = "todo://hooks/logs",
+                resourceType = "list",
+                description = "Hook execution logs",
+                data = logs
+            });
+        }
+
+        public string GetHookStatus()
+        {
+            var counts = hookManager.GetAllHookCounts();
+            return JsonConvert.SerializeObject(new
+            {
+                resourceUri = "todo://hooks/status",
+                resourceType = "single",
+                description = "Registered hooks and their handler counts",
+                data = counts
             });
         }
     }

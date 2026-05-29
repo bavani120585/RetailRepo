@@ -6,20 +6,23 @@ namespace TodoMcpServer
     public class McpTools
     {
         private TodoService todoService;
+        private HookManager hookManager;
 
-        public McpTools(TodoService todoService)
+        public McpTools(TodoService todoService, HookManager hookManager)
         {
             this.todoService = todoService;
+            this.hookManager = hookManager;
         }
 
         public string CreateTaskTool(string title, string description)
         {
             var todo = todoService.CreateTodo(title, description);
+            hookManager.ExecuteTaskCreatedHooks(todo);
             return JsonConvert.SerializeObject(new
             {
                 toolName = "create_task",
                 success = true,
-                message = $"Task created with ID {todo.Id}",
+                message = $"Task created with ID {todo.Id}. Hooks fired.",
                 result = todo
             });
         }
@@ -38,12 +41,17 @@ namespace TodoMcpServer
 
         public string DeleteTaskTool(int id)
         {
+            var todo = todoService.GetTodoById(id);
             bool deleted = todoService.DeleteTodo(id);
+            if (deleted && todo != null)
+            {
+                hookManager.ExecuteTaskDeletedHooks(todo);
+            }
             return JsonConvert.SerializeObject(new
             {
                 toolName = "delete_task",
                 success = deleted,
-                message = deleted ? $"Task {id} deleted" : "Task not found",
+                message = deleted ? "Task deleted. Hooks fired." : "Task not found",
                 taskId = id
             });
         }
@@ -51,11 +59,15 @@ namespace TodoMcpServer
         public string CompleteTaskTool(int id)
         {
             var todo = todoService.CompleteTodo(id);
+            if (todo != null)
+            {
+                hookManager.ExecuteTaskCompletedHooks(todo);
+            }
             return JsonConvert.SerializeObject(new
             {
                 toolName = "complete_task",
                 success = todo != null,
-                message = todo != null ? "Task marked complete" : "Task not found",
+                message = todo != null ? "Task marked complete. Hooks fired." : "Task not found",
                 result = todo
             });
         }
