@@ -1,0 +1,6 @@
+{
+  "projectId": "learning-development-c-000027",
+  "model": "claude-haiku-4-5@20251001",
+  "region": "us-east5",
+  "apiEndpoint": "us-east5-aiplatform.googleapis.com"
+}
